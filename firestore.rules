@@ -1,0 +1,13 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validRoom(roomId) {
+      return roomId.matches('^[0-9]{1,12}$');
+    }
+
+    match /rooms/{roomId}/{document=**} {
+      allow read, write: if validRoom(roomId);
+    }
+  }
+}

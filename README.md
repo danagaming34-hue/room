@@ -28,6 +28,16 @@ Other devices on the same Wi-Fi can use your computer's LAN URL, for example:
 http://192.168.100.87:3000
 ```
 
+## Live Firebase Site
+
+The Firebase-hosted version is live here:
+
+```text
+https://rooms-chat-47021.web.app
+```
+
+It uses Firebase Hosting for the website and Cloud Firestore for persistent room messages.
+
 ## GitHub Hosting Note
 
 GitHub Pages hosts static HTML, CSS, and JavaScript. This app needs `server.js` running for real-time rooms, so the full chat cannot run only on GitHub Pages. Push this repo to GitHub for source hosting, then deploy it to a Node host such as Render, Railway, Fly.io, Azure App Service, or a VPS.

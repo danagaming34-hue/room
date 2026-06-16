@@ -1,10 +1,45 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getFirestore,
+  getDocs,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  writeBatch,
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const firebaseConfig = {
+  projectId: "rooms-chat-47021",
+  appId: "1:683561918570:web:0d887e76f5e0091170ea13",
+  storageBucket: "rooms-chat-47021.firebasestorage.app",
+  apiKey: "AIzaSyAnpK5Xng5h0UKQosgyI1uzgcDlABu2MQs",
+  authDomain: "rooms-chat-47021.firebaseapp.com",
+  messagingSenderId: "683561918570",
+  measurementId: "G-44T8PDSWLG",
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const MAX_ATTACHMENTS = 8;
+const MAX_FILE_BYTES = 3 * 1024 * 1024;
+const CHUNK_SIZE = 620000;
+
 const state = {
   room: "",
   name: localStorage.getItem("rooms:name") || "",
   clientId: localStorage.getItem("rooms:clientId") || makeId(),
   messages: new Map(),
-  source: null,
+  unsubscribe: null,
   attachments: [],
+  attachmentCache: new Map(),
   editingId: null,
 };
 
@@ -155,16 +190,15 @@ async function joinRoom(room) {
   elements.chatView.classList.remove("hidden");
   elements.messageInput.focus();
   setStatus("Connecting", false);
-
-  await loadMessages(room);
-  connectEvents(room);
+  subscribeToRoom(room);
 }
 
 function leaveRoom() {
-  if (state.source) {
-    state.source.close();
+  if (state.unsubscribe) {
+    state.unsubscribe();
   }
-  state.source = null;
+
+  state.unsubscribe = null;
   state.room = "";
   state.messages.clear();
   state.attachments = [];
@@ -177,40 +211,36 @@ function leaveRoom() {
   cancelEdit();
 }
 
-async function loadMessages(room) {
-  try {
-    const response = await fetch(`/api/rooms/${room}`);
-    const data = await response.json();
-    state.messages = new Map((data.messages || []).map((message) => [message.id, message]));
-    renderMessages();
-  } catch {
-    setStatus("Offline", true);
+function subscribeToRoom(room) {
+  if (state.unsubscribe) {
+    state.unsubscribe();
   }
+
+  const messagesQuery = query(collection(db, "rooms", room, "messages"), orderBy("createdAt", "asc"), limit(400));
+  state.unsubscribe = onSnapshot(
+    messagesQuery,
+    (snapshot) => {
+      state.messages = new Map(snapshot.docs.map((messageDoc) => [messageDoc.id, normalizeMessage(messageDoc)]));
+      setStatus("Live", false);
+      renderMessages(true);
+    },
+    () => {
+      setStatus("Offline", true);
+    },
+  );
 }
 
-function connectEvents(room) {
-  if (state.source) {
-    state.source.close();
-  }
-
-  state.source = new EventSource(`/events/${room}`);
-  state.source.addEventListener("connected", () => setStatus("Live", false));
-  state.source.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    state.messages.set(message.id, message);
-    renderMessages(true);
-  });
-  state.source.addEventListener("update", (event) => {
-    const message = JSON.parse(event.data);
-    state.messages.set(message.id, message);
-    renderMessages(true);
-  });
-  state.source.addEventListener("delete", (event) => {
-    const message = JSON.parse(event.data);
-    state.messages.delete(message.id);
-    renderMessages(true);
-  });
-  state.source.onerror = () => setStatus("Reconnecting", true);
+function normalizeMessage(messageDoc) {
+  const data = messageDoc.data();
+  return {
+    id: messageDoc.id,
+    sender: data.sender || "Guest",
+    clientId: data.clientId || "",
+    text: data.text || "",
+    attachments: Array.isArray(data.attachments) ? data.attachments : [],
+    createdAt: timestampToIso(data.createdAt),
+    updatedAt: data.updatedAt ? timestampToIso(data.updatedAt) : null,
+  };
 }
 
 async function submitMessage() {
@@ -224,21 +254,13 @@ async function submitMessage() {
 
   try {
     if (state.editingId) {
-      await api(`/api/rooms/${state.room}/messages/${state.editingId}`, {
-        method: "PATCH",
-        body: { text },
+      await updateDoc(messageRef(state.editingId), {
+        text: cleanText(text),
+        updatedAt: serverTimestamp(),
       });
       cancelEdit();
     } else {
-      await api(`/api/rooms/${state.room}/messages`, {
-        method: "POST",
-        body: {
-          sender: state.name || "Guest",
-          clientId: state.clientId,
-          text,
-          attachments: state.attachments,
-        },
-      });
+      await createMessage(text);
       elements.messageInput.value = "";
       state.attachments = [];
       renderAttachments();
@@ -252,19 +274,40 @@ async function submitMessage() {
   }
 }
 
-async function api(url, options = {}) {
-  const response = await fetch(url, {
-    method: options.method || "GET",
-    headers: { "Content-Type": "application/json" },
-    body: options.body ? JSON.stringify(options.body) : undefined,
+async function createMessage(text) {
+  const ref = doc(collection(db, "rooms", state.room, "messages"));
+  const batch = writeBatch(db);
+  const attachments = state.attachments.map((attachment) => ({
+    id: makeId(),
+    name: attachment.name,
+    type: attachment.type,
+    size: attachment.size,
+    chunkCount: Math.ceil(attachment.dataUrl.length / CHUNK_SIZE),
+  }));
+
+  batch.set(ref, {
+    sender: (state.name || "Guest").slice(0, 40),
+    clientId: state.clientId,
+    text: cleanText(text),
+    attachments,
+    createdAt: serverTimestamp(),
+    updatedAt: null,
   });
-  const data = await response.json().catch(() => ({}));
 
-  if (!response.ok) {
-    throw new Error(data.error || "Request failed.");
-  }
+  state.attachments.forEach((attachment, attachmentIndex) => {
+    const meta = attachments[attachmentIndex];
+    const attachmentRef = doc(ref, "attachments", meta.id);
+    batch.set(attachmentRef, meta);
 
-  return data;
+    splitIntoChunks(attachment.dataUrl).forEach((chunk, index) => {
+      batch.set(doc(attachmentRef, "chunks", String(index).padStart(5, "0")), {
+        index,
+        data: chunk,
+      });
+    });
+  });
+
+  await batch.commit();
 }
 
 async function addFiles(fileList) {
@@ -274,11 +317,11 @@ async function addFiles(fileList) {
   }
 
   for (const file of files) {
-    if (state.attachments.length >= 8) {
+    if (state.attachments.length >= MAX_ATTACHMENTS) {
       break;
     }
-    if (file.size > 7 * 1024 * 1024) {
-      alert(`${file.name} is too large. Keep one file under 7 MB.`);
+    if (file.size > MAX_FILE_BYTES) {
+      alert(`${file.name} is too large. Keep one file under 3 MB for the free database.`);
       continue;
     }
     state.attachments.push(await fileToAttachment(file));
@@ -378,7 +421,7 @@ function renderMessage(message) {
     attachmentWrap.className = "message-attachments";
 
     message.attachments.forEach((attachment) => {
-      attachmentWrap.append(renderMessageAttachment(attachment));
+      attachmentWrap.append(renderMessageAttachment(message.id, attachment));
     });
     item.append(attachmentWrap);
   }
@@ -399,34 +442,61 @@ function renderMessage(message) {
   return item;
 }
 
-function renderMessageAttachment(attachment) {
-  if ((attachment.type || "").startsWith("image/")) {
-    const link = document.createElement("a");
-    link.className = "image-attachment";
-    link.href = attachment.dataUrl;
-    link.download = attachment.name;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
+function renderMessageAttachment(messageId, attachment) {
+  const holder = document.createElement("div");
+  holder.className = (attachment.type || "").startsWith("image/") ? "image-attachment" : "file-attachment";
+  holder.textContent = `Loading ${attachment.name}`;
 
-    const image = document.createElement("img");
-    image.src = attachment.dataUrl;
-    image.alt = attachment.name;
-    image.loading = "lazy";
-    link.append(image);
-    return link;
+  loadAttachmentDataUrl(messageId, attachment)
+    .then((dataUrl) => {
+      holder.textContent = "";
+      if ((attachment.type || "").startsWith("image/")) {
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = attachment.name;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+
+        const image = document.createElement("img");
+        image.src = dataUrl;
+        image.alt = attachment.name;
+        image.loading = "lazy";
+        link.append(image);
+        holder.replaceWith(link);
+        link.className = "image-attachment";
+        return;
+      }
+
+      const link = document.createElement("a");
+      link.className = "file-attachment";
+      link.href = dataUrl;
+      link.download = attachment.name;
+
+      const name = document.createElement("span");
+      name.textContent = attachment.name;
+      const size = document.createElement("small");
+      size.textContent = formatBytes(attachment.size);
+      link.append(name, size);
+      holder.replaceWith(link);
+    })
+    .catch(() => {
+      holder.textContent = `Could not load ${attachment.name}`;
+    });
+
+  return holder;
+}
+
+async function loadAttachmentDataUrl(messageId, attachment) {
+  const cacheKey = `${messageId}:${attachment.id}`;
+  if (state.attachmentCache.has(cacheKey)) {
+    return state.attachmentCache.get(cacheKey);
   }
 
-  const link = document.createElement("a");
-  link.className = "file-attachment";
-  link.href = attachment.dataUrl;
-  link.download = attachment.name;
-
-  const name = document.createElement("span");
-  name.textContent = attachment.name;
-  const size = document.createElement("small");
-  size.textContent = formatBytes(attachment.size);
-  link.append(name, size);
-  return link;
+  const chunksQuery = query(collection(db, "rooms", state.room, "messages", messageId, "attachments", attachment.id, "chunks"), orderBy("index", "asc"));
+  const snapshot = await getDocs(chunksQuery);
+  const dataUrl = snapshot.docs.map((chunkDoc) => chunkDoc.data().data || "").join("");
+  state.attachmentCache.set(cacheKey, dataUrl);
+  return dataUrl;
 }
 
 function messageAction(label, icon, handler, danger = false) {
@@ -463,8 +533,25 @@ async function deleteMessage(id, ask) {
   if (ask && !confirm("Delete this message?")) {
     return;
   }
+
   try {
-    await api(`/api/rooms/${state.room}/messages/${id}`, { method: "DELETE" });
+    const message = state.messages.get(id);
+    const ref = messageRef(id);
+
+    if (!message?.attachments?.length) {
+      await deleteDoc(ref);
+      return;
+    }
+
+    const batch = writeBatch(db);
+    for (const attachment of message.attachments) {
+      const attachmentRef = doc(ref, "attachments", attachment.id);
+      const chunkSnapshot = await getDocs(collection(attachmentRef, "chunks"));
+      chunkSnapshot.forEach((chunkDoc) => batch.delete(chunkDoc.ref));
+      batch.delete(attachmentRef);
+    }
+    batch.delete(ref);
+    await batch.commit();
   } catch (error) {
     alert(error.message || "Could not delete.");
   }
@@ -512,6 +599,22 @@ async function copyToClipboard(value) {
   }
 }
 
+function messageRef(id) {
+  return doc(db, "rooms", state.room, "messages", id);
+}
+
+function splitIntoChunks(value) {
+  const chunks = [];
+  for (let index = 0; index < value.length; index += CHUNK_SIZE) {
+    chunks.push(value.slice(index, index + CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+function cleanText(value) {
+  return String(value || "").replace(/\u0000/g, "").slice(0, 12000);
+}
+
 function attachmentSummary(message) {
   return (message.attachments || []).map((attachment) => attachment.name).join(", ");
 }
@@ -528,6 +631,22 @@ function updateSendState() {
 function resizeComposer() {
   elements.messageInput.style.height = "auto";
   elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 160)}px`;
+}
+
+function timestampToIso(value) {
+  if (value?.toDate) {
+    return value.toDate().toISOString();
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return new Date().toISOString();
 }
 
 function formatTime(value) {
