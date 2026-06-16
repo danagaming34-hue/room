@@ -29,8 +29,9 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 const MAX_ATTACHMENTS = 8;
-const MAX_FILE_BYTES = 3 * 1024 * 1024;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const CHUNK_SIZE = 620000;
+const BATCH_LIMIT = 18;
 
 const state = {
   room: "",
@@ -52,6 +53,7 @@ const elements = {
   roomInput: document.querySelector("#roomInput"),
   chatView: document.querySelector("#chatView"),
   roomTitle: document.querySelector("#roomTitle"),
+  roomSubtitle: document.querySelector("#roomSubtitle"),
   statusPill: document.querySelector("#statusPill"),
   copyRoomButton: document.querySelector("#copyRoomButton"),
   leaveButton: document.querySelector("#leaveButton"),
@@ -83,6 +85,11 @@ const icons = {
   leave: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg>',
   close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>',
   link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 1 0-7.1-7.1l-1.1 1.1"></path><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 1 0 7.1 7.1l1.1-1.1"></path></svg>',
+  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>',
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
+  video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 13 5 3V8l-5 3Z"></path><rect x="3" y="5" width="13" height="14" rx="2"></rect></svg>',
+  audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>',
+  document: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path><path d="M8 13h8"></path><path d="M8 17h5"></path></svg>',
 };
 
 elements.nameInput.value = state.name;
@@ -93,6 +100,11 @@ elements.copyDraftButton.innerHTML = icons.copy;
 elements.cutDraftButton.innerHTML = icons.cut;
 elements.copyRoomButton.innerHTML = icons.link;
 elements.leaveButton.innerHTML = icons.leave;
+
+const toastRegion = document.createElement("div");
+toastRegion.className = "toast-region";
+toastRegion.setAttribute("aria-live", "polite");
+document.body.append(toastRegion);
 
 const urlRoom = new URLSearchParams(window.location.search).get("room");
 if (urlRoom && /^[0-9]{1,12}$/.test(urlRoom)) {
@@ -121,12 +133,12 @@ elements.nameInput.addEventListener("input", () => {
 });
 
 elements.leaveButton.addEventListener("click", leaveRoom);
-elements.copyRoomButton.addEventListener("click", () => copyToClipboard(window.location.href));
+elements.copyRoomButton.addEventListener("click", () => copyToClipboard(window.location.href, "Room link copied"));
 elements.imageButton.addEventListener("click", () => elements.imageInput.click());
 elements.fileButton.addEventListener("click", () => elements.fileInput.click());
-elements.copyDraftButton.addEventListener("click", () => copyToClipboard(elements.messageInput.value));
+elements.copyDraftButton.addEventListener("click", () => copyToClipboard(elements.messageInput.value, "Draft copied"));
 elements.cutDraftButton.addEventListener("click", async () => {
-  await copyToClipboard(elements.messageInput.value);
+  await copyToClipboard(elements.messageInput.value, "Draft cut");
   elements.messageInput.value = "";
   resizeComposer();
   updateSendState();
@@ -186,6 +198,7 @@ async function joinRoom(room) {
   history.replaceState(null, "", `/?room=${encodeURIComponent(room)}`);
 
   elements.roomTitle.textContent = room;
+  updateRoomSubtitle(0);
   elements.joinPanel.classList.add("hidden");
   elements.chatView.classList.remove("hidden");
   elements.messageInput.focus();
@@ -222,6 +235,7 @@ function subscribeToRoom(room) {
     (snapshot) => {
       state.messages = new Map(snapshot.docs.map((messageDoc) => [messageDoc.id, normalizeMessage(messageDoc)]));
       setStatus("Live", false);
+      updateRoomSubtitle(state.messages.size);
       renderMessages(true);
     },
     () => {
@@ -267,7 +281,7 @@ async function submitMessage() {
     }
     resizeComposer();
   } catch (error) {
-    alert(error.message || "Could not send.");
+      notify(error.message || "Could not send.", "danger");
   } finally {
     updateSendState();
     elements.messageInput.focus();
@@ -276,7 +290,6 @@ async function submitMessage() {
 
 async function createMessage(text) {
   const ref = doc(collection(db, "rooms", state.room, "messages"));
-  const batch = writeBatch(db);
   const attachments = state.attachments.map((attachment) => ({
     id: makeId(),
     name: attachment.name,
@@ -285,7 +298,11 @@ async function createMessage(text) {
     chunkCount: Math.ceil(attachment.dataUrl.length / CHUNK_SIZE),
   }));
 
-  batch.set(ref, {
+  for (let index = 0; index < state.attachments.length; index += 1) {
+    await writeAttachment(ref, attachments[index], state.attachments[index]);
+  }
+
+  await setDoc(ref, {
     sender: (state.name || "Guest").slice(0, 40),
     clientId: state.clientId,
     text: cleanText(text),
@@ -293,21 +310,34 @@ async function createMessage(text) {
     createdAt: serverTimestamp(),
     updatedAt: null,
   });
+}
 
-  state.attachments.forEach((attachment, attachmentIndex) => {
-    const meta = attachments[attachmentIndex];
-    const attachmentRef = doc(ref, "attachments", meta.id);
-    batch.set(attachmentRef, meta);
+async function writeAttachment(messageReference, meta, attachment) {
+  const attachmentRef = doc(messageReference, "attachments", meta.id);
+  const chunks = splitIntoChunks(attachment.dataUrl);
+  let batch = writeBatch(db);
+  let operations = 0;
 
-    splitIntoChunks(attachment.dataUrl).forEach((chunk, index) => {
-      batch.set(doc(attachmentRef, "chunks", String(index).padStart(5, "0")), {
-        index,
-        data: chunk,
-      });
+  batch.set(attachmentRef, meta);
+  operations += 1;
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    batch.set(doc(attachmentRef, "chunks", String(index).padStart(5, "0")), {
+      index,
+      data: chunks[index],
     });
-  });
+    operations += 1;
 
-  await batch.commit();
+    if (operations >= BATCH_LIMIT) {
+      await batch.commit();
+      batch = writeBatch(db);
+      operations = 0;
+    }
+  }
+
+  if (operations > 0) {
+    await batch.commit();
+  }
 }
 
 async function addFiles(fileList) {
@@ -318,10 +348,11 @@ async function addFiles(fileList) {
 
   for (const file of files) {
     if (state.attachments.length >= MAX_ATTACHMENTS) {
+      notify(`Only ${MAX_ATTACHMENTS} attachments at once`, "danger");
       break;
     }
     if (file.size > MAX_FILE_BYTES) {
-      alert(`${file.name} is too large. Keep one file under 3 MB for the free database.`);
+      notify(`${file.name} is too large. Keep one file under 5 MB.`, "danger");
       continue;
     }
     state.attachments.push(await fileToAttachment(file));
@@ -355,7 +386,15 @@ function renderAttachments() {
 
   state.attachments.forEach((attachment, index) => {
     const item = elements.attachmentTemplate.content.firstElementChild.cloneNode(true);
+    const thumb = item.querySelector(".draft-thumb");
     item.querySelector(".draft-attachment-name").textContent = attachment.name;
+    item.querySelector(".draft-attachment-meta").textContent = `${fileKindLabel(attachment.type)} · ${formatBytes(attachment.size)}`;
+    thumb.innerHTML = getAttachmentIcon(attachment.type);
+    if ((attachment.type || "").startsWith("image/")) {
+      thumb.style.backgroundImage = `url("${attachment.dataUrl}")`;
+      thumb.classList.add("has-preview");
+      thumb.innerHTML = "";
+    }
     const removeButton = item.querySelector("button");
     removeButton.innerHTML = icons.close;
     removeButton.addEventListener("click", () => {
@@ -399,14 +438,23 @@ function renderMessage(message) {
   const meta = document.createElement("div");
   meta.className = "message-meta";
 
+  const identity = document.createElement("div");
+  identity.className = "message-identity";
+
+  const avatar = document.createElement("span");
+  avatar.className = "message-avatar";
+  avatar.textContent = initials(message.sender || "Guest");
+
   const sender = document.createElement("span");
+  sender.className = "message-sender";
   sender.textContent = message.sender || "Guest";
+  identity.append(avatar, sender);
 
   const time = document.createElement("time");
   time.dateTime = message.createdAt;
   time.textContent = formatTime(message.updatedAt || message.createdAt) + (message.updatedAt ? " edited" : "");
 
-  meta.append(sender, time);
+  meta.append(identity, time);
   item.append(meta);
 
   if (message.text) {
@@ -430,9 +478,9 @@ function renderMessage(message) {
   actions.className = "message-actions";
   actions.append(
     messageAction("Edit", icons.edit, () => startEdit(message)),
-    messageAction("Copy", icons.copy, () => copyToClipboard(message.text || attachmentSummary(message))),
+    messageAction("Copy", icons.copy, () => copyToClipboard(message.text || attachmentSummary(message), "Message copied")),
     messageAction("Cut", icons.cut, async () => {
-      await copyToClipboard(message.text || attachmentSummary(message));
+      await copyToClipboard(message.text || attachmentSummary(message), "Message cut");
       await deleteMessage(message.id, false);
     }),
     messageAction("Delete", icons.trash, () => deleteMessage(message.id, true), true),
@@ -443,47 +491,70 @@ function renderMessage(message) {
 }
 
 function renderMessageAttachment(messageId, attachment) {
-  const holder = document.createElement("div");
-  holder.className = (attachment.type || "").startsWith("image/") ? "image-attachment" : "file-attachment";
-  holder.textContent = `Loading ${attachment.name}`;
+  const card = document.createElement("article");
+  const kind = attachmentKind(attachment.type);
+  card.className = `media-card ${kind}`;
+
+  const preview = document.createElement("div");
+  preview.className = "media-preview is-loading";
+  preview.innerHTML = getAttachmentIcon(attachment.type);
+
+  const body = document.createElement("div");
+  body.className = "media-body";
+
+  const title = document.createElement("div");
+  title.className = "media-title";
+  title.textContent = attachment.name;
+
+  const meta = document.createElement("div");
+  meta.className = "media-meta";
+  meta.textContent = `${fileKindLabel(attachment.type)} · ${formatBytes(attachment.size)}`;
+
+  const actions = document.createElement("div");
+  actions.className = "media-actions";
+
+  body.append(title, meta, actions);
+  card.append(preview, body);
 
   loadAttachmentDataUrl(messageId, attachment)
     .then((dataUrl) => {
-      holder.textContent = "";
-      if ((attachment.type || "").startsWith("image/")) {
-        const link = document.createElement("a");
-        link.href = dataUrl;
-        link.download = attachment.name;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
+      preview.classList.remove("is-loading");
+      preview.innerHTML = "";
 
+      if (kind === "image") {
         const image = document.createElement("img");
         image.src = dataUrl;
         image.alt = attachment.name;
         image.loading = "lazy";
-        link.append(image);
-        holder.replaceWith(link);
-        link.className = "image-attachment";
-        return;
+        preview.append(image);
+        preview.addEventListener("click", () => openMediaViewer(dataUrl, attachment));
+      } else if (kind === "video") {
+        const video = document.createElement("video");
+        video.src = dataUrl;
+        video.controls = true;
+        video.preload = "metadata";
+        preview.append(video);
+      } else if (kind === "audio") {
+        const audio = document.createElement("audio");
+        audio.src = dataUrl;
+        audio.controls = true;
+        preview.append(audio);
+      } else {
+        preview.innerHTML = getAttachmentIcon(attachment.type);
       }
 
-      const link = document.createElement("a");
-      link.className = "file-attachment";
-      link.href = dataUrl;
-      link.download = attachment.name;
-
-      const name = document.createElement("span");
-      name.textContent = attachment.name;
-      const size = document.createElement("small");
-      size.textContent = formatBytes(attachment.size);
-      link.append(name, size);
-      holder.replaceWith(link);
+      actions.append(
+        mediaAction("Save", icons.download, dataUrl, attachment.name, true),
+        mediaAction("Open", icons.open, dataUrl, attachment.name, false),
+      );
     })
     .catch(() => {
-      holder.textContent = `Could not load ${attachment.name}`;
+      preview.classList.remove("is-loading");
+      preview.innerHTML = getAttachmentIcon(attachment.type);
+      meta.textContent = "Could not load file";
     });
 
-  return holder;
+  return card;
 }
 
 async function loadAttachmentDataUrl(messageId, attachment) {
@@ -497,6 +568,97 @@ async function loadAttachmentDataUrl(messageId, attachment) {
   const dataUrl = snapshot.docs.map((chunkDoc) => chunkDoc.data().data || "").join("");
   state.attachmentCache.set(cacheKey, dataUrl);
   return dataUrl;
+}
+
+function mediaAction(label, icon, dataUrl, name, download) {
+  const link = document.createElement("a");
+  link.className = "media-action";
+  link.href = dataUrl;
+  link.innerHTML = `${icon}<span>${label}</span>`;
+
+  if (download) {
+    link.download = name;
+  } else {
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+  }
+
+  return link;
+}
+
+function openMediaViewer(dataUrl, attachment) {
+  const kind = attachmentKind(attachment.type);
+  const viewer = document.createElement("div");
+  viewer.className = "media-viewer";
+  viewer.setAttribute("role", "dialog");
+  viewer.setAttribute("aria-modal", "true");
+
+  const panel = document.createElement("div");
+  panel.className = "media-viewer-panel";
+
+  const header = document.createElement("div");
+  header.className = "media-viewer-header";
+
+  const title = document.createElement("div");
+  title.className = "media-viewer-title";
+  title.textContent = attachment.name;
+
+  const actions = document.createElement("div");
+  actions.className = "media-viewer-actions";
+  actions.append(mediaAction("Save", icons.download, dataUrl, attachment.name, true));
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "icon-button";
+  closeButton.type = "button";
+  closeButton.title = "Close";
+  closeButton.setAttribute("aria-label", "Close");
+  closeButton.innerHTML = icons.close;
+  actions.append(closeButton);
+
+  const stage = document.createElement("div");
+  stage.className = "media-viewer-stage";
+
+  if (kind === "image") {
+    const image = document.createElement("img");
+    image.src = dataUrl;
+    image.alt = attachment.name;
+    stage.append(image);
+  } else if (kind === "video") {
+    const video = document.createElement("video");
+    video.src = dataUrl;
+    video.controls = true;
+    video.autoplay = true;
+    stage.append(video);
+  } else if (kind === "audio") {
+    const audio = document.createElement("audio");
+    audio.src = dataUrl;
+    audio.controls = true;
+    audio.autoplay = true;
+    stage.append(audio);
+  }
+
+  header.append(title, actions);
+  panel.append(header, stage);
+  viewer.append(panel);
+  document.body.append(viewer);
+
+  const close = () => {
+    document.removeEventListener("keydown", onKeyDown);
+    viewer.remove();
+  };
+  const onKeyDown = (event) => {
+    if (event.key === "Escape") {
+      close();
+    }
+  };
+
+  closeButton.addEventListener("click", close);
+  viewer.addEventListener("click", (event) => {
+    if (event.target === viewer) {
+      close();
+    }
+  });
+  document.addEventListener("keydown", onKeyDown);
 }
 
 function messageAction(label, icon, handler, danger = false) {
@@ -553,7 +715,7 @@ async function deleteMessage(id, ask) {
     batch.delete(ref);
     await batch.commit();
   } catch (error) {
-    alert(error.message || "Could not delete.");
+    notify(error.message || "Could not delete.", "danger");
   }
 }
 
@@ -581,7 +743,7 @@ function appendLinkedText(container, text) {
   }
 }
 
-async function copyToClipboard(value) {
+async function copyToClipboard(value, successMessage = "Copied") {
   const text = String(value || "");
   if (!text) {
     return;
@@ -597,6 +759,8 @@ async function copyToClipboard(value) {
     document.execCommand("copy");
     input.remove();
   }
+
+  notify(successMessage);
 }
 
 function messageRef(id) {
@@ -619,9 +783,74 @@ function attachmentSummary(message) {
   return (message.attachments || []).map((attachment) => attachment.name).join(", ");
 }
 
+function attachmentKind(type) {
+  const value = type || "";
+  if (value.startsWith("image/")) {
+    return "image";
+  }
+  if (value.startsWith("video/")) {
+    return "video";
+  }
+  if (value.startsWith("audio/")) {
+    return "audio";
+  }
+  if (value.includes("pdf") || value.startsWith("text/") || value.includes("document")) {
+    return "document";
+  }
+  return "file";
+}
+
+function fileKindLabel(type) {
+  const kind = attachmentKind(type);
+  return {
+    image: "Image",
+    video: "Video",
+    audio: "Audio",
+    document: "Document",
+    file: "File",
+  }[kind];
+}
+
+function getAttachmentIcon(type) {
+  const kind = attachmentKind(type);
+  return {
+    image: icons.image,
+    video: icons.video,
+    audio: icons.audio,
+    document: icons.document,
+    file: icons.file,
+  }[kind];
+}
+
+function initials(name) {
+  return String(name || "G")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0] || "")
+    .join("")
+    .toUpperCase() || "G";
+}
+
 function setStatus(text, offline) {
   elements.statusPill.textContent = text;
   elements.statusPill.classList.toggle("offline", offline);
+}
+
+function updateRoomSubtitle(count) {
+  elements.roomSubtitle.textContent = `${count} ${count === 1 ? "message" : "messages"}`;
+}
+
+function notify(message, tone = "success") {
+  const toast = document.createElement("div");
+  toast.className = `toast ${tone}`;
+  toast.textContent = message;
+  toastRegion.append(toast);
+  setTimeout(() => toast.classList.add("show"), 20);
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 220);
+  }, 2400);
 }
 
 function updateSendState() {

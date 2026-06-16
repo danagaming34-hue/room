@@ -5,10 +5,11 @@ A tiny room-based chat app. People who enter the same room number join the same 
 ## Features
 
 - Room numbers for joining from multiple devices
-- Live updates with Server-Sent Events
+- Live updates with Cloud Firestore
 - Text, clickable links, pasted images, dropped files, and file uploads
+- Image, video, audio, and file media cards with save/open actions
 - Message edit, copy, cut, and delete actions
-- Local message persistence in `data/rooms.json`
+- Firebase-hosted persistence with Cloud Firestore
 
 ## Run Locally
 
@@ -37,6 +38,8 @@ https://rooms-chat-47021.web.app
 ```
 
 It uses Firebase Hosting for the website and Cloud Firestore for persistent room messages.
+
+Media files are stored in Firestore chunks to avoid requiring Firebase Storage billing. Keep each file under 5 MB.
 
 ## GitHub Hosting Note
 
