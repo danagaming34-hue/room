@@ -1,0 +1,12 @@
+{
+  "name": "rooms-chat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local hosted room chat with shared room numbers, images, links, files, and message actions.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

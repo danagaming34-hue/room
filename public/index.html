@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rooms</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="join-panel" id="joinPanel" aria-label="Join a room">
+        <div class="join-card">
+          <div>
+            <p class="eyebrow">Rooms</p>
+            <h1>Join by number</h1>
+          </div>
+          <form class="join-form" id="joinForm">
+            <label>
+              <span>Name</span>
+              <input id="nameInput" maxlength="40" autocomplete="name" placeholder="Guest" />
+            </label>
+            <label>
+              <span>Room number</span>
+              <input
+                id="roomInput"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                maxlength="12"
+                autocomplete="off"
+                placeholder="1234"
+                required
+              />
+            </label>
+            <button class="primary-button" type="submit">Join</button>
+          </form>
+        </div>
+      </section>
+
+      <section class="chat-view hidden" id="chatView" aria-label="Room chat">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Room</p>
+            <h1 id="roomTitle">0000</h1>
+          </div>
+          <div class="topbar-actions">
+            <span class="status-pill" id="statusPill">Connecting</span>
+            <button class="icon-button" id="copyRoomButton" type="button" title="Copy room link" aria-label="Copy room link"></button>
+            <button class="icon-button" id="leaveButton" type="button" title="Leave room" aria-label="Leave room"></button>
+          </div>
+        </header>
+
+        <div class="drop-zone" id="dropZone">
+          <ol class="messages" id="messages" aria-live="polite"></ol>
+        </div>
+
+        <footer class="composer">
+          <div class="edit-strip hidden" id="editStrip">
+            <span>Editing message</span>
+            <button class="text-button" id="cancelEditButton" type="button">Cancel</button>
+          </div>
+          <div class="attachment-tray hidden" id="attachmentTray"></div>
+          <form class="composer-form" id="messageForm">
+            <div class="composer-tools">
+              <button class="icon-button" id="imageButton" type="button" title="Add image" aria-label="Add image"></button>
+              <button class="icon-button" id="fileButton" type="button" title="Add file" aria-label="Add file"></button>
+              <button class="icon-button" id="copyDraftButton" type="button" title="Copy draft" aria-label="Copy draft"></button>
+              <button class="icon-button" id="cutDraftButton" type="button" title="Cut draft" aria-label="Cut draft"></button>
+            </div>
+            <textarea id="messageInput" rows="1" maxlength="12000" placeholder="Text, links, paste images, drop files"></textarea>
+            <button class="send-button" id="sendButton" type="submit" title="Send" aria-label="Send"></button>
+          </form>
+          <input class="hidden" id="imageInput" type="file" accept="image/*" multiple />
+          <input class="hidden" id="fileInput" type="file" multiple />
+        </footer>
+      </section>
+    </main>
+
+    <template id="attachmentTemplate">
+      <div class="draft-attachment">
+        <span class="draft-attachment-name"></span>
+        <button class="icon-button small" type="button" title="Remove" aria-label="Remove"></button>
+      </div>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
