@@ -31,3 +31,17 @@ http://192.168.100.87:3000
 ## GitHub Hosting Note
 
 GitHub Pages hosts static HTML, CSS, and JavaScript. This app needs `server.js` running for real-time rooms, so the full chat cannot run only on GitHub Pages. Push this repo to GitHub for source hosting, then deploy it to a Node host such as Render, Railway, Fly.io, Azure App Service, or a VPS.
+
+## Deploy on Render
+
+This repo includes `render.yaml`, so Render can create the Node web service from the repository.
+
+Recommended settings if creating the service manually:
+
+```text
+Runtime: Node
+Build Command: npm install
+Start Command: npm start
+```
+
+Render provides `PORT` automatically, and the server uses it.

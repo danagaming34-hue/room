@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: rooms-chat
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 22
