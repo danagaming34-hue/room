@@ -10,6 +10,7 @@ A tiny room-based chat app. People who enter the same room number join the same 
 - Image, video, audio, and file media cards with preview-first viewing and explicit save actions
 - Message edit, copy, cut, and delete actions
 - Firebase-hosted persistence with Cloud Firestore
+- Remembers the last room on each device and auto-rejoins after refresh
 
 ## Run Locally
 

@@ -2,4 +2,6 @@ node_modules/
 data/
 .firebase/
 screenshots/
+.visible-preview-edge/
+.room-memory-test/
 *.log

@@ -32,6 +32,7 @@ const MAX_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const CHUNK_SIZE = 620000;
 const BATCH_LIMIT = 18;
+const LAST_ROOM_KEY = "rooms:lastRoom";
 
 const state = {
   room: "",
@@ -108,9 +109,10 @@ toastRegion.setAttribute("aria-live", "polite");
 document.body.append(toastRegion);
 
 const urlRoom = new URLSearchParams(window.location.search).get("room");
-if (urlRoom && /^[0-9]{1,12}$/.test(urlRoom)) {
-  elements.roomInput.value = urlRoom;
-  joinRoom(urlRoom);
+const initialRoom = sanitizeRoom(urlRoom) || sanitizeRoom(localStorage.getItem(LAST_ROOM_KEY));
+if (initialRoom) {
+  elements.roomInput.value = initialRoom;
+  joinRoom(initialRoom);
 }
 
 elements.joinForm.addEventListener("submit", (event) => {
@@ -190,21 +192,39 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+window.addEventListener("pageshow", () => {
+  if (state.room) {
+    return;
+  }
+
+  const savedRoom = sanitizeRoom(localStorage.getItem(LAST_ROOM_KEY));
+  if (savedRoom) {
+    elements.roomInput.value = savedRoom;
+    joinRoom(savedRoom);
+  }
+});
+
 updateSendState();
 
 async function joinRoom(room) {
-  state.room = room;
+  const cleanRoom = sanitizeRoom(room);
+  if (!cleanRoom) {
+    return;
+  }
+
+  state.room = cleanRoom;
   state.name = elements.nameInput.value.trim() || "Guest";
   localStorage.setItem("rooms:name", state.name);
-  history.replaceState(null, "", `/?room=${encodeURIComponent(room)}`);
+  localStorage.setItem(LAST_ROOM_KEY, cleanRoom);
+  history.replaceState(null, "", `/?room=${encodeURIComponent(cleanRoom)}`);
 
-  elements.roomTitle.textContent = room;
+  elements.roomTitle.textContent = cleanRoom;
   updateRoomSubtitle(0);
   elements.joinPanel.classList.add("hidden");
   elements.chatView.classList.remove("hidden");
   elements.messageInput.focus();
   setStatus("Connecting", false);
-  subscribeToRoom(room);
+  subscribeToRoom(cleanRoom);
 }
 
 function leaveRoom() {
@@ -217,6 +237,7 @@ function leaveRoom() {
   state.messages.clear();
   state.attachments = [];
   state.editingId = null;
+  localStorage.removeItem(LAST_ROOM_KEY);
   history.replaceState(null, "", "/");
   elements.chatView.classList.add("hidden");
   elements.joinPanel.classList.remove("hidden");
@@ -801,6 +822,11 @@ function splitIntoChunks(value) {
 
 function cleanText(value) {
   return String(value || "").replace(/\u0000/g, "").slice(0, 12000);
+}
+
+function sanitizeRoom(value) {
+  const room = String(value || "").replace(/\D/g, "").slice(0, 12);
+  return room || "";
 }
 
 function attachmentSummary(message) {
