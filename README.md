@@ -34,6 +34,8 @@ GitHub Pages hosts static HTML, CSS, and JavaScript. This app needs `server.js` 
 
 ## Deploy on Render
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/danagaming34-hue/room)
+
 This repo includes `render.yaml`, so Render can create the Node web service from the repository.
 
 Recommended settings if creating the service manually:
