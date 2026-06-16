@@ -418,8 +418,12 @@ textarea:focus {
   padding: 0 8px;
 }
 
-.media-card.image .media-preview {
-  cursor: zoom-in;
+.media-preview.can-preview {
+  cursor: pointer;
+}
+
+.media-preview.can-preview:hover {
+  filter: saturate(1.08);
 }
 
 .media-card.video {
@@ -480,6 +484,8 @@ textarea:focus {
   background: #f3f6f5;
   border: 1px solid var(--line);
   border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
   font-size: 0.78rem;
   font-weight: 900;
   text-decoration: none;
@@ -790,6 +796,64 @@ textarea {
 
 .media-viewer-stage audio {
   width: min(100%, 560px);
+}
+
+.media-frame {
+  width: 100%;
+  height: min(72vh, 760px);
+  background: #fff;
+  border: 0;
+  border-radius: 8px;
+}
+
+.media-text-preview {
+  width: min(100%, 920px);
+  max-height: min(72vh, 760px);
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  color: #f4f8f7;
+  background: #151a1d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.media-fallback {
+  display: grid;
+  width: min(100%, 520px);
+  gap: 10px;
+  justify-items: center;
+  padding: 28px;
+  color: #f4f8f7;
+  text-align: center;
+}
+
+.media-fallback svg {
+  width: 54px;
+  height: 54px;
+  color: #b7d9d4;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  fill: none;
+}
+
+.media-fallback strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+
+.media-fallback span,
+.media-fallback p {
+  margin: 0;
+  color: #b8c5c1;
+  font-weight: 800;
 }
 
 @media (max-width: 760px) {

@@ -7,7 +7,7 @@ A tiny room-based chat app. People who enter the same room number join the same 
 - Room numbers for joining from multiple devices
 - Live updates with Cloud Firestore
 - Text, clickable links, pasted images, dropped files, and file uploads
-- Image, video, audio, and file media cards with save/open actions
+- Image, video, audio, and file media cards with preview-first viewing and explicit save actions
 - Message edit, copy, cut, and delete actions
 - Firebase-hosted persistence with Cloud Firestore
 

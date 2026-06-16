@@ -87,6 +87,7 @@ const icons = {
   link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 1 0-7.1-7.1l-1.1 1.1"></path><path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 1 0 7.1 7.1l1.1-1.1"></path></svg>',
   download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="M7 10l5 5 5-5"></path><path d="M12 15V3"></path></svg>',
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>',
+  eye: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
   video: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 13 5 3V8l-5 3Z"></path><rect x="3" y="5" width="13" height="14" rx="2"></rect></svg>',
   audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>',
   document: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"></path><path d="M14 2v6h6"></path><path d="M8 13h8"></path><path d="M8 17h5"></path></svg>',
@@ -519,6 +520,7 @@ function renderMessageAttachment(messageId, attachment) {
   loadAttachmentDataUrl(messageId, attachment)
     .then((dataUrl) => {
       preview.classList.remove("is-loading");
+      preview.classList.add("can-preview");
       preview.innerHTML = "";
 
       if (kind === "image") {
@@ -527,7 +529,6 @@ function renderMessageAttachment(messageId, attachment) {
         image.alt = attachment.name;
         image.loading = "lazy";
         preview.append(image);
-        preview.addEventListener("click", () => openMediaViewer(dataUrl, attachment));
       } else if (kind === "video") {
         const video = document.createElement("video");
         video.src = dataUrl;
@@ -543,9 +544,16 @@ function renderMessageAttachment(messageId, attachment) {
         preview.innerHTML = getAttachmentIcon(attachment.type);
       }
 
+      preview.addEventListener("click", (event) => {
+        if (event.target.closest("video, audio")) {
+          return;
+        }
+        openMediaViewer(dataUrl, attachment);
+      });
+
       actions.append(
-        mediaAction("Save", icons.download, dataUrl, attachment.name, true),
-        mediaAction("Open", icons.open, dataUrl, attachment.name, false),
+        saveMediaAction(dataUrl, attachment.name),
+        previewMediaAction(dataUrl, attachment),
       );
     })
     .catch(() => {
@@ -570,20 +578,23 @@ async function loadAttachmentDataUrl(messageId, attachment) {
   return dataUrl;
 }
 
-function mediaAction(label, icon, dataUrl, name, download) {
+function saveMediaAction(dataUrl, name) {
   const link = document.createElement("a");
   link.className = "media-action";
   link.href = dataUrl;
-  link.innerHTML = `${icon}<span>${label}</span>`;
-
-  if (download) {
-    link.download = name;
-  } else {
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-  }
+  link.download = name;
+  link.innerHTML = `${icons.download}<span>Save</span>`;
 
   return link;
+}
+
+function previewMediaAction(dataUrl, attachment) {
+  const button = document.createElement("button");
+  button.className = "media-action";
+  button.type = "button";
+  button.innerHTML = `${icons.eye}<span>Preview</span>`;
+  button.addEventListener("click", () => openMediaViewer(dataUrl, attachment));
+  return button;
 }
 
 function openMediaViewer(dataUrl, attachment) {
@@ -605,7 +616,7 @@ function openMediaViewer(dataUrl, attachment) {
 
   const actions = document.createElement("div");
   actions.className = "media-viewer-actions";
-  actions.append(mediaAction("Save", icons.download, dataUrl, attachment.name, true));
+  actions.append(saveMediaAction(dataUrl, attachment.name));
 
   const closeButton = document.createElement("button");
   closeButton.className = "icon-button";
@@ -635,6 +646,19 @@ function openMediaViewer(dataUrl, attachment) {
     audio.controls = true;
     audio.autoplay = true;
     stage.append(audio);
+  } else if (kind === "document" && isPdf(attachment.type)) {
+    const frame = document.createElement("iframe");
+    frame.className = "media-frame";
+    frame.src = dataUrl;
+    frame.title = attachment.name;
+    stage.append(frame);
+  } else if (kind === "document" && isTextLike(attachment.type)) {
+    const pre = document.createElement("pre");
+    pre.className = "media-text-preview";
+    pre.textContent = decodeDataUrlText(dataUrl);
+    stage.append(pre);
+  } else {
+    stage.append(renderUnsupportedPreview(attachment));
   }
 
   header.append(title, actions);
@@ -809,6 +833,52 @@ function fileKindLabel(type) {
     document: "Document",
     file: "File",
   }[kind];
+}
+
+function isPdf(type) {
+  return String(type || "").toLowerCase().includes("pdf");
+}
+
+function isTextLike(type) {
+  const value = String(type || "").toLowerCase();
+  return value.startsWith("text/") || value.includes("json") || value.includes("xml") || value.includes("javascript");
+}
+
+function decodeDataUrlText(dataUrl) {
+  const [, metadata = "", payload = ""] = dataUrl.match(/^data:([^,]*),(.*)$/s) || [];
+  if (!payload) {
+    return "";
+  }
+
+  try {
+    if (metadata.includes(";base64")) {
+      const binary = atob(payload);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+
+    return decodeURIComponent(payload);
+  } catch {
+    return "Preview unavailable for this text file.";
+  }
+}
+
+function renderUnsupportedPreview(attachment) {
+  const fallback = document.createElement("div");
+  fallback.className = "media-fallback";
+  fallback.innerHTML = getAttachmentIcon(attachment.type);
+
+  const title = document.createElement("strong");
+  title.textContent = attachment.name;
+
+  const meta = document.createElement("span");
+  meta.textContent = `${fileKindLabel(attachment.type)} · ${formatBytes(attachment.size)}`;
+
+  const note = document.createElement("p");
+  note.textContent = "Preview is not available for this file type. Use Save when you want to download it.";
+
+  fallback.append(title, meta, note);
+  return fallback;
 }
 
 function getAttachmentIcon(type) {
